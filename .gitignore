@@ -1,0 +1,71 @@
+# System and IDE files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+*.tmp
+*.bak
+
+# Windows specific
+*.exe
+*.dll
+*.lib
+*.pdb
+*.idb
+*.ilk
+*.suo
+*.user
+*.cache
+
+# Visual Studio Code
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Build artifacts
+output/
+*.bin
+*.o
+*.obj
+*.elf
+*.j64
+*.rom
+*.coff
+*.abs
+
+# Logs and temporary files
+*.log
+*.out
+*.dump
+*.lst
+*.map
+
+# JagStudio temporary files
+*.lst
+*.sym
+
+# Environment and local configuration
+.env
+.env.local
+.env.*.local
