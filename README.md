@@ -37,9 +37,12 @@ assembler and linker (no Raptor or U235 engine).
 - **Blitter**: block copies, phrase mode, Gouraud/Z limits
 - **Joypad, cartridge EEPROM saves, Atari game standards**
 - **Performance on the console**: why emulator speed is misleading, an on-screen measurement HUD,
-  68000 bus starvation
-- **Testing**: MAME (headless Lua probes, memory taps, instruction traces, WAV and video capture),
-  Virtual Jaguar, SkunkBoard, diagnostic ROMs, audio checks without listening
+  68000 bus starvation, the 68000 cost model (bus accesses) and how to cut them, moving a loop
+  from the 68000 to the DSP main code with a parameter block and a GO/STATUS handshake
+- **Testing**: MAME (headless Lua probes, memory taps, instruction traces, WAV and video capture,
+  deterministic picture-by-picture regression tests), JagMCP (cycle-faithful emulator: real
+  console speed, 68000 profiling by sampling), Virtual Jaguar, SkunkBoard, diagnostic ROMs, audio
+  checks without listening
 
 ## Hardware overview
 
@@ -78,6 +81,8 @@ attached document).
    - **MAME**: scriptable in Lua, debugger, audio capture
    - **BigPEmu**
    - **Virtual Jaguar**
+   - **JagMCP**: emulator ported from the Jaguar_MiSTer FPGA core, cycle-faithful and slow;
+     unlike the others it reproduces the console's speed (bus contention), driven over MCP
 3. **Real hardware** to validate: a Jaguar console with a SkunkBoard or a flash cartridge. An
    emulator alone does not prove that a ROM works.
 4. **Python 3.10+** for build scripts (assembling the cartridge image).
@@ -105,7 +110,11 @@ And the ones that make a ROM much slower on the console than in an emulator:
 - A GPU/DSP instruction that reads the result of the previous one waits a cycle; so does a
   conditional jump right after the instruction that set the flags. Interleave two independent
   computations in hot loops: naive code runs at about half speed, scheduled code at two thirds.
-- Emulators model neither these wait states nor bus contention: measure speed on the console.
+- Emulators model neither these wait states nor bus contention: measure speed on the console or
+  in JagMCP. A ROM at full speed in MAME can run at half speed on the console.
+- On the console a 68000 instruction costs about its bus accesses (~40 ticks on average, about
+  11k instructions per frame instead of the ~21k MAME runs): fewer instruction and data words
+  beat fewer cycles, and whole loops move well to the GPU or the DSP.
 
 ```assembly
 ; dependency chain: three wait states          ; scheduled: none
@@ -154,7 +163,8 @@ concise.
 This project is licensed under the **MIT License**; see the [LICENSE](LICENSE) file for details.
 
 This skill is provided as-is for educational and development purposes. It is based on public
-Jaguar documentation and on the analysis of existing Jaguar projects.
+Jaguar documentation, on the analysis of existing Jaguar projects, and on measurements made in
+emulators and on a real console.
 
 ## Acknowledgments
 
@@ -163,5 +173,5 @@ Jaguar documentation and on the analysis of existing Jaguar projects.
 
 ---
 
-*Last updated: 2026-10-12*
+*Last updated: 2026-10-17*
 *Compatible with any LLM*

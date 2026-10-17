@@ -1,6 +1,6 @@
 ---
 name: atari-jaguar-game-dev
-description: Generic Atari Jaguar game development skill for bare-metal assembly (no Raptor/U235). Covers the hardware (68000, GPU/Tom, DSP/Jerry, Object Processor, Blitter), the memory map, the JagStudio toolchain (rmac/rln), cartridge layout and boot, the rules the real console enforces but emulators do not (long-only accesses to GPU/DSP memory, registers never to touch, RISC processors never stopped from outside, OLP written by the GPU, object list structure and alignment), the documented GPU/DSP/Blitter/OP hardware bugs and their workarounds, GPU/DSP pipeline scheduling (wait states, interleaving, offline estimation from MAME traces), audio on the DSP, joypad, cartridge EEPROM saves, Atari's game standards, measuring performance on the console (emulators model no bus contention), and testing with MAME, Virtual Jaguar and real hardware (SkunkBoard, diagnostic ROMs). Use before writing or changing Jaguar 68000, GPU, DSP or Blitter code, building a cartridge, optimising a hot loop, or debugging a ROM that works in an emulator but not on the console or runs slower there.
+description: Generic Atari Jaguar game development skill for bare-metal assembly (no Raptor/U235). Covers the hardware (68000, GPU/Tom, DSP/Jerry, Object Processor, Blitter), the memory map, the JagStudio toolchain (rmac/rln), cartridge layout and boot, the rules the real console enforces but emulators do not (long-only accesses to GPU/DSP memory, registers never to touch, RISC processors never stopped from outside, OLP written by the GPU, object list structure and alignment), the documented GPU/DSP/Blitter/OP hardware bugs and their workarounds, GPU/DSP pipeline scheduling (wait states, interleaving, offline estimation from MAME traces), audio on the DSP, joypad, cartridge EEPROM saves, Atari's game standards, measuring performance on the console (emulators model no bus contention), and testing with MAME (traces, picture-by-picture regression tests), JagMCP (cycle-faithful: speed and 68000 profiles), Virtual Jaguar and real hardware (SkunkBoard, diagnostic ROMs). Use before writing or changing Jaguar 68000, GPU, DSP or Blitter code, building a cartridge, optimising a hot loop, or debugging a ROM that works in an emulator but not on the console or runs slower there.
 ---
 
 # Atari Jaguar Game Development Guide
@@ -117,7 +117,8 @@ window.
   segment of its own: align before and after it so the `move.l` copy reads whole longs.
 - Macros: `.macro NAME arg` / `\arg` / `.endm`. A macro named like an instruction is silently
   replaced by it (the DSP has a `mirror` instruction: a macro `MIRROR` never runs).
-- Check that RISC code fits: `.if gpu_end > TABLES_START` / `.error` / `.endif`.
+- Check that RISC code fits: `.if gpu_end > TABLES_START` / `.error` / `.endif`. An `.if` that
+  compares with an equ computed from other equs can be misjudged: compare with literals there.
 - Listing: `-l<file>` with no space; a long absolute path can give an empty listing with no
   message: use a relative name. Addresses in a listing are relative to the section's `.org`
   (GPU code listed from 0 = $F03000). To list only the RISC code, assemble a small wrapper
@@ -350,7 +351,9 @@ pixel bit 0 picks CRY (0) or RGB (1) per pixel. 1-8 bpp objects go through the C
   none. Idling it in a loop is fine: a DSP main loop reduced to `idle: jr t,idle` / `nop`, all the
   work done in its I2S interrupt, runs correctly on the console (verified on hardware; no
   document of this set forbids a one-instruction loop). Use a semaphore in local RAM when the
-  idle code must be asked to do something (or to stop itself, rule 4).
+  idle code must be asked to do something (or to stop itself, rule 4); the main code can be a
+  whole service (Performance on the real console) as long as the ISR keeps the main code's flags
+  (DSP audio section) and the main code uses the other register bank.
 - Interrupt vectors at local RAM base + 16*n. GPU: 0 CPU, 1 Jerry, 2 video timing, 3 OP (GPU
   object), 4 Blitter. DSP: 0 CPU, 1 I2S, 2 timer 1, 3 timer 2, 4-5 external (enable/clear for 5 =
   D_FLAGS bits 16/17). The interrupt pushes on r31 and clobbers r30 (bank 0): never use them in
@@ -568,7 +571,10 @@ options screen clears the EEPROM.
 
 - GPU renders into framebuffers in main RAM (triple buffering: one shown, one published, one being
   drawn); it publishes the finished buffer index in a local-RAM long; the 68000 VBlank ISR reads
-  it (long), points the bitmap object at it and tells the GPU which one is shown.
+  it (long), points the bitmap object at it and tells the GPU which one is shown. The GPU draws
+  into a buffer that is neither shown nor the last published (it waits for the VBlank if none is
+  free). With two buffers it starts drawing into the one still on screen: tearing on moving
+  objects, invisible in tests that compare finished buffers.
 - Feed the GPU through a command log/ring in main RAM; publish the write index with a long write.
 - Clears and copies go to the Blitter; 3D: the GPU computes spans, the Blitter draws them.
 - Pace the game loop on the VBlank count; skip drawing (not logic) when late.
@@ -576,8 +582,9 @@ options screen clears the EEPROM.
 ## Performance on the real console
 
 Emulator speed says little: MAME models no bus contention, no DRAM page or ROM wait states and
-none of the RISC wait states (a program at 60 fps in MAME can run at half speed on the console).
-Measure on the console:
+none of the RISC wait states (a program at 60 fps in MAME can run at half speed on the console;
+a 68000 program measured with half its time idle in MAME can lack time on the console). Measure
+on the console, or in JagMCP (Testing):
 
 - **On-screen HUD** (a small bitmap object, debug build), refreshed every 60 VBlanks: game
   frames, drawn frames, % of the time the 68000 waits for the GPU, % of the time it is idle.
@@ -595,6 +602,31 @@ Measure on the console:
 - **Count accesses in MAME** to find what loads the bus: read/write taps on main RAM, ROM and
   RISC RAM, per frame (68000 reads from ROM are up to 10x slower than from DRAM).
 - **RISC wait states**: estimate them offline from a MAME trace (Pipeline section).
+- **68000 cost model**: on the console a 68000 instruction costs about its BUS ACCESSES
+  (instruction words + data words), internal cycles matter much less. Measured in JagMCP, in
+  26.59 MHz ticks: `moveq` ~15, register-only instructions ~16 (one word fetch), memory operands
+  45-90, ~40 on average: about 11k 68000 instructions per NTSC frame (443k ticks), half of what
+  MAME runs (~21k). So: fewer words beats fewer cycles. Count them offline from a MAME trace (instruction length = next PC - PC on sequential
+  steps, data size from the operands, RMW = 2 accesses, `rts`/`bsr` 2 stack words, `movem` 1-2
+  per register) per routine and per instruction pattern, and attack the top patterns. Examples:
+  the high byte of a word register through the stack (`move.w d1,-(a7)` / `move.b (a7)+,d7`:
+  4 accesses) -> `move.w d1,d7` / `ror.w #8,d7` (2; `ror` keeps X, `lsr` does not); writing it
+  `ror.w #8,d1` / `move.b src,d1` / `ror.w #8,d1` (3) instead of stack + `movem.w` (~8); no
+  shared tail reached by `bra` in hot dispatchers (a taken branch refetches 2 words); `bra.w`
+  (2 words) instead of `jmp abs.l` (3) when in range; skip calls whose preconditions fail late.
+  rmac's `+o` optimisations change little (it already shortens branches).
+- **Per-line 68000 loops** (raster effects, line-by-line state): keep the loop state in
+  registers and write the state variables once after the loop, not on every line: a body of ~50
+  instructions run on every display line can alone exceed the frame on the console. Publish a ring's write index to the GPU/DSP once per batch,
+  not after every entry. A data-bound copy gains little from `movem` (~15%): send less data.
+- **Move whole loops off the 68000**: a per-line loop that only reads tables and writes a
+  command list or RAM moves well to the DSP main code (next to the I2S interrupt, GPU-style
+  code at RISC speed): the 68000 fills a parameter block of longs in DSP RAM, writes GO = 1,
+  waits (polling spaced by a `dbra` delay), the DSP writes results + STATUS, then GO = 0 (last).
+  If the output buffer may fill up, the DSP stops after N bytes with STATUS = "need room", GO = 0,
+  waits for GO != 0; the 68000 makes room and writes the new pointer then GO = 2. Write results
+  that only matter at the end (state bytes) once at the end. Measured: one such loop, ~20% of the
+  68000's time, gave +15% game speed.
 
 ## Testing and debugging
 
@@ -610,16 +642,49 @@ Measure on the console:
 - Install memory taps in the first `register_frame_done` call, not when the script loads: taps
   installed before the machine starts are dropped (counters stay at 0). Keep a reference to the
   returned tap object.
-- `-debug -debugger none` + `debugger:command("trace file,maincpu")` (or `,gpu` / `,dsp`) for
-  instruction traces; a repeated loop is written once, then `(loops for N instructions)`.
+- `-debug -debugger none` + `debugger:command("trace file,maincpu,noloop")` (or `,gpu` / `,dsp`)
+  for instruction traces. Without `noloop` a repeated loop is written once, then `(loops for N
+  instructions)`: profiles built from such a trace hugely under-count tight loops.
 - Video: `-aviwrite name.avi` works with `-video none` (written in `-snapshot_directory`; raw
   RGB + 48 kHz PCM, about 1.5 GB per minute); convert with ffmpeg (`pip install imageio-ffmpeg`
   bundles a binary). The picture inside the AVI frame is the display area, borders included.
 - The MAME config can skip the BIOS logo; also test with a fresh `-cfg_directory` to boot through
   it. TV system (NTSC/PAL) is a machine configuration setting: test both.
-- Limits: no bus contention, GPU/DSP ~1 cycle per instruction: performance measured there is
-  optimistic. Snapshots do not show the BG colour. Word accesses to RISC RAM are accepted, and none
-  of the RISC/Blitter hardware bugs above are emulated.
+- Limits: no bus contention, GPU/DSP 1 cycle per instruction (a taken `jr`/`jump` 4 with its
+  delay slot), the 68000 at full speed: performance measured there is optimistic. Snapshots do
+  not show the BG colour. No interlace. Word accesses to RISC RAM are accepted, and none of the
+  RISC/Blitter hardware bugs above are emulated.
+
+### Picture-by-picture regression tests
+
+Build a deterministic test variant: every frame drawn, the 68000 waits for the GPU, one game frame
+per VBlank, joypad input read from a schedule (in game frames) that the Lua probe writes to RAM.
+The picture of frame N then depends on neither processor's speed. Dump the displayed framebuffer
+at fixed frames once as the reference, then after each change compare bit for bit (and make a
+contact sheet of the differences). It validates every rendering or scheduling change, but not
+timing-dependent effects: tearing, and audio (frames that take two VBlanks slow the music).
+
+### JagMCP (cycle-faithful, from the MiSTer FPGA core)
+
+- JagMCP ports the Jaguar_MiSTer core (Atari's Tom and Jerry netlists) to C++, tested cycle by
+  cycle against it: unlike MAME it reproduces bus contention and timing, so a game too slow on
+  the console is too slow there. It is slow itself (a few emulated frames per second). Needs
+  your own BIOS (`--bios jagboot.rom`).
+- `jagmcp-cli --mcp` serves MCP on stdio (or `--server` for JSON lines): `emu_load` (args as
+  the command line: `--m68k --bios FILE --cart game.j64`), `emu_run_frames`, `input_set` (pad
+  names a, b, c, up, ..., option, pause, star, hash), `memory_read`, `video_screenshot`,
+  `cpu_get_state`, `debug_trace` (68000: the cycle each instruction began), breakpoints and
+  watchpoints, `debug_diagnostics` (reads of addresses nothing answers: code that works only by
+  chance).
+- Over stdio it speaks JSON-RPC: `initialize`, the `notifications/initialized` notification, then
+  `tools/call`. About 5 emulated frames per second (11x slower than real time).
+- Measure the real speed by reading the program's own counters (VBlanks, game frames, frames
+  drawn) between `emu_run_frames` calls.
+- 68000 profile by sampling: `emu_run_cycles` a random number of cycles, then `debug_trace`
+  (at most 1024 68000 instructions, each with the 26.59 MHz tick it began); cost of an
+  instruction = next start - its start; aggregate per symbol of the linker map. Labels that are
+  not exported fall into the previous global one: export the routines you want to see, or go down
+  to costs per PC.
 
 ### Virtual Jaguar 2.1.2
 
@@ -658,7 +723,7 @@ samples at full scale (±32767): more than a fraction of a percent means the DSP
 - Atari developer kit: Appendix (FAQ, programming guidelines, development standards), Libraries
   (startup code, EEPROM library), Workshop (object list examples), MADMAC manual.
 - Jaguar Technical Reference Manual rev. 8 (2001): Blitter registers, Jerry, DSP, instruction set.
-- JagStudio: `JAGUAR.INC`, samples. MAME, Virtual Jaguar, BigPEmu. AtariAge Jaguar forum.
+- JagStudio: `JAGUAR.INC`, samples. MAME, JagMCP, Virtual Jaguar, BigPEmu. AtariAge Jaguar forum.
 
 ---
-*Last updated: 2026-10-12*
+*Last updated: 2026-10-17*
